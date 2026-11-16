@@ -43,7 +43,17 @@ st.markdown(
          font-weight: 600 !important; margin-top: 10px !important;
          margin-bottom: 6px !important; }
 
-    p { color: #37443a; font-size: 15px; line-height: 1.6; }
+    p { color: #37443a; font-size: 15px; line-height: 1.6;     li, ol, ul, label, summary,
+    [data-testid="stMarkdownContainer"],
+    [data-testid="stMarkdownContainer"] li,
+    [data-testid="stMarkdownContainer"] p,
+    [data-testid="stCaptionContainer"],
+    [data-testid="stWidgetLabel"] p,
+    button[data-baseweb="tab"] {
+        color: #37443a !important;
+    }
+    [data-testid="stMarkdownContainer"] strong { color: #1f4a2b !important; }}
+
 
     section[data-testid="stSidebar"] {
         background-color: #eaf3eb;
@@ -1065,6 +1075,549 @@ def simulate_rejection_rate(true_mean, mu_0, sigma, n, alpha, tail, repeats, rng
 
 
 # ==========================================================
+# NEW: HELPERS FOR UNIT II (PROBABILITY DISTRIBUTIONS)
+# ==========================================================
+def binomial_pmf(k, n, p):
+    """P(X = k) for a binomial distribution."""
+
+    if k < 0 or k > n:
+        return 0.0
+
+    return math.comb(n, k) * (p ** k) * ((1 - p) ** (n - k))
+
+
+def poisson_pmf(k, lam):
+    """P(X = k) for a Poisson distribution."""
+
+    if k < 0:
+        return 0.0
+
+    return math.exp(-lam + k * math.log(lam) - math.lgamma(k + 1))
+
+
+def bar_pmf_chart(ks, probs, highlight, title, x_title, key):
+    """Bar chart of a discrete distribution; highlighted bars are darker."""
+
+    colors = ["#2e7d32" if k in highlight else "#a5d6a7" for k in ks]
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Bar(
+            x=list(ks),
+            y=list(probs),
+            marker_color=colors,
+            marker_line=dict(color="#4caf50", width=1),
+            hovertemplate="X = %{x}<br>P = %{y:.4f}<extra></extra>"
+        )
+    )
+
+    fig = style_figure(fig, title, x_title, "Probability", height=400)
+    fig.update_layout(showlegend=False)
+
+    show_chart(fig, key=key)
+
+
+# ==========================================================
+# NEW: HELPERS FOR UNIT III (CONFIDENCE INTERVALS, F-TEST)
+# ==========================================================
+def f_upper_tail(f_value, df1, df2):
+    """P(F > f_value) for the F distribution (used by one-way ANOVA)."""
+
+    if f_value <= 0:
+        return 1.0
+
+    x = df2 / (df2 + df1 * f_value)
+
+    return _regularized_incomplete_beta(df2 / 2, df1 / 2, x)
+
+
+def confidence_interval_for_mean(mean_value, spread, n, confidence, method):
+    """Return (lower, upper, critical value, margin of error)."""
+
+    standard_error = spread / math.sqrt(n)
+
+    if method == "Z (σ known)":
+        critical = normal.inv_cdf(1 - (1 - confidence) / 2)
+    else:
+        critical = t_critical_value((1 - confidence) / 2, n - 1)
+
+    margin = critical * standard_error
+
+    return mean_value - margin, mean_value + margin, critical, margin
+
+
+# ==========================================================
+# NEW: HELPERS FOR UNIT IV (REGRESSION AND METRICS)
+# ==========================================================
+def regression_metrics(actual, predicted):
+    """MAE, MSE, RMSE and R² from the formulas."""
+
+    actual = np.asarray(actual, dtype=float)
+    predicted = np.asarray(predicted, dtype=float)
+
+    errors = actual - predicted
+    n = len(actual)
+
+    mae = float(np.sum(np.abs(errors)) / n)
+    mse = float(np.sum(errors ** 2) / n)
+    rmse = math.sqrt(mse)
+
+    ss_res = float(np.sum(errors ** 2))
+    ss_tot = float(np.sum((actual - actual.mean()) ** 2))
+
+    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+
+    return {"MAE": mae, "MSE": mse, "RMSE": rmse, "R²": r2}
+
+
+def fit_ols(X, y):
+    """
+    Ordinary least squares with an intercept (normal equation).
+
+    beta = (XᵀX)⁻¹ Xᵀy. Returns coefficients with standard errors,
+    t statistics and p-values.
+    """
+
+    X = np.asarray(X, dtype=float).reshape(len(y), -1)
+    y = np.asarray(y, dtype=float)
+
+    n = len(y)
+    design = np.column_stack([np.ones(n), X])
+    k = design.shape[1] - 1
+
+    xtx_inverse = np.linalg.pinv(design.T @ design)
+    beta = xtx_inverse @ design.T @ y
+
+    fitted = design @ beta
+    residuals = y - fitted
+
+    df_resid = n - k - 1
+    ss_res = float(np.sum(residuals ** 2))
+    ss_tot = float(np.sum((y - y.mean()) ** 2))
+
+    mse_resid = ss_res / df_resid if df_resid > 0 else float("nan")
+
+    standard_errors = np.sqrt(np.maximum(np.diag(xtx_inverse) * mse_resid, 0))
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t_values = beta / standard_errors
+
+    p_values = [
+        min(1.0, 2 * t_upper_tail(abs(t), df_resid))
+        if (df_resid > 0 and np.isfinite(t)) else float("nan")
+        for t in t_values
+    ]
+
+    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+    adj_r2 = (
+        1 - (1 - r2) * (n - 1) / df_resid
+        if df_resid > 0 and not np.isnan(r2) else float("nan")
+    )
+
+    ss_reg = ss_tot - ss_res
+    f_value = (
+        (ss_reg / k) / mse_resid
+        if k > 0 and df_resid > 0 and mse_resid > 0 else float("nan")
+    )
+    f_p = (
+        f_upper_tail(f_value, k, df_resid) if not np.isnan(f_value) else float("nan")
+    )
+
+    return {
+        "beta": beta,
+        "se": standard_errors,
+        "t": t_values,
+        "p": p_values,
+        "fitted": fitted,
+        "residuals": residuals,
+        "r2": r2,
+        "adj_r2": adj_r2,
+        "df_resid": df_resid,
+        "f": f_value,
+        "f_p": f_p,
+        "k": k
+    }
+
+
+def predict_ols(beta, X):
+    """Predictions from fitted coefficients (beta[0] is the intercept)."""
+
+    X = np.asarray(X, dtype=float).reshape(-1, len(beta) - 1)
+
+    return beta[0] + X @ beta[1:]
+
+
+def durbin_watson(residuals):
+    """Durbin–Watson statistic (about 2 means no first-order autocorrelation)."""
+
+    residuals = np.asarray(residuals, dtype=float)
+    denominator = float(np.sum(residuals ** 2))
+
+    if denominator == 0 or len(residuals) < 2:
+        return float("nan")
+
+    return float(np.sum(np.diff(residuals) ** 2) / denominator)
+
+
+def run_regression(df, x_columns, y_column, use_log, test_share, key):
+    """Fit a regression, show the results, metrics, plots and interpretation."""
+
+    columns = list(dict.fromkeys(list(x_columns) + [y_column]))
+    data = df[["State/UT"] + columns].dropna().copy()
+
+    if use_log:
+        data = data[(data[columns] > 0).all(axis=1)].copy()
+
+        for col in columns:
+            data[col] = np.log10(data[col])
+
+    k = len(x_columns)
+    n = len(data)
+
+    names = {col: (f"log10({col})" if use_log else col) for col in columns}
+
+    if n < k + 4:
+        st.warning(
+            f"Only {n} States/UTs have complete data for these variables. "
+            "Choose fewer predictors or different variables."
+        )
+        return None
+
+    # Optional train / test split
+    if test_share > 0:
+        order = np.random.default_rng(42).permutation(n)
+        n_test = max(2, int(round(n * test_share)))
+        test_index = order[:n_test]
+        train_index = order[n_test:]
+    else:
+        train_index = np.arange(n)
+        test_index = np.array([], dtype=int)
+
+    if len(train_index) < k + 3:
+        st.warning("The training set is too small. Reduce the test share.")
+        return None
+
+    X_all = data[list(x_columns)].to_numpy(dtype=float)
+    y_all = data[y_column].to_numpy(dtype=float)
+
+    model = fit_ols(X_all[train_index], y_all[train_index])
+    beta = model["beta"]
+
+    train_pred = predict_ols(beta, X_all[train_index])
+    train_metrics = regression_metrics(y_all[train_index], train_pred)
+
+    st.write(
+        f"Based on **{n}** States/UTs with complete data"
+        + (" (log10 applied; rows with zero or negative values dropped)."
+           if use_log else ".")
+    )
+
+    # ---------------- Equation ----------------
+    equation = f"ŷ = {beta[0]:,.4g}"
+
+    for i, col in enumerate(x_columns):
+        sign = "+" if beta[i + 1] >= 0 else "−"
+        equation += f" {sign} {abs(beta[i + 1]):,.4g} × [{names[col]}]"
+
+    st.subheader("Fitted equation")
+    st.code(equation, language=None)
+
+    # ---------------- Coefficient table ----------------
+    st.subheader("Coefficients")
+
+    labels = ["Intercept"] + [names[c] for c in x_columns]
+
+    coefficient_table = pd.DataFrame({
+        "Term": labels,
+        "Coefficient": [f"{b:,.4g}" for b in beta],
+        "Std. error": [f"{s:,.4g}" for s in model["se"]],
+        "t": [f"{t:,.3f}" for t in model["t"]],
+        "p-value": [show_p_value(p) if not np.isnan(p) else "N/A"
+                    for p in model["p"]]
+    })
+
+    show_table(coefficient_table, hide_index=True)
+
+    # ---------------- Metrics ----------------
+    st.subheader("Model evaluation metrics")
+
+    metric_rows = {
+        "Metric": ["MAE", "MSE", "RMSE", "R² score"],
+        "Training data": [
+            f"{train_metrics['MAE']:,.4g}", f"{train_metrics['MSE']:,.4g}",
+            f"{train_metrics['RMSE']:,.4g}", f"{train_metrics['R²']:.4f}"
+        ]
+    }
+
+    test_metrics = None
+
+    if len(test_index) > 0:
+        test_pred = predict_ols(beta, X_all[test_index])
+        test_metrics = regression_metrics(y_all[test_index], test_pred)
+
+        metric_rows["Test data"] = [
+            f"{test_metrics['MAE']:,.4g}", f"{test_metrics['MSE']:,.4g}",
+            f"{test_metrics['RMSE']:,.4g}", f"{test_metrics['R²']:.4f}"
+        ]
+
+    show_table(pd.DataFrame(metric_rows), hide_index=True)
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric("R²", f"{model['r2']:.4f}")
+
+    with col2:
+        st.metric("Adjusted R²", f"{model['adj_r2']:.4f}")
+
+    with col3:
+        st.metric(
+            f"F statistic (df = {model['k']}, {model['df_resid']})",
+            f"{model['f']:.3f}" if not np.isnan(model["f"]) else "N/A"
+        )
+
+    st.caption(
+        "MAE = average absolute error. MSE = average squared error. "
+        "RMSE = √MSE, in the same units as y. R² = share of the variation "
+        "in y explained by the model. Adjusted R² penalises extra "
+        "predictors. The overall F-test p-value is "
+        f"{show_p_value(model['f_p']) if not np.isnan(model['f_p']) else 'N/A'}."
+    )
+
+    if test_metrics is not None:
+        st.caption(
+            "Test-data metrics show how well the model predicts States/UTs "
+            "it was not trained on. If they are much worse than the "
+            "training metrics, the model is over-fitting."
+        )
+
+    # ---------------- Plots ----------------
+    plot_col1, plot_col2 = st.columns(2)
+
+    with plot_col1:
+        fig_fit = go.Figure()
+
+        fig_fit.add_trace(
+            go.Scatter(
+                x=y_all[train_index], y=train_pred, mode="markers",
+                text=data["State/UT"].to_numpy()[train_index],
+                marker=dict(color="#2e7d32", size=9, opacity=0.75),
+                name="Training",
+                hovertemplate="<b>%{text}</b><br>Actual: %{x:,.3f}"
+                              "<br>Predicted: %{y:,.3f}<extra></extra>"
+            )
+        )
+
+        if len(test_index) > 0:
+            fig_fit.add_trace(
+                go.Scatter(
+                    x=y_all[test_index], y=test_pred, mode="markers",
+                    text=data["State/UT"].to_numpy()[test_index],
+                    marker=dict(color="#1565c0", size=9, opacity=0.85,
+                                symbol="diamond"),
+                    name="Test",
+                    hovertemplate="<b>%{text}</b><br>Actual: %{x:,.3f}"
+                                  "<br>Predicted: %{y:,.3f}<extra></extra>"
+                )
+            )
+
+        low = float(min(y_all.min(), train_pred.min()))
+        high = float(max(y_all.max(), train_pred.max()))
+
+        fig_fit.add_trace(
+            go.Scatter(
+                x=[low, high], y=[low, high], mode="lines",
+                line=dict(color="#e57373", dash="dash"),
+                name="Perfect prediction"
+            )
+        )
+
+        fig_fit = style_figure(
+            fig_fit, "Actual vs predicted",
+            f"Actual {names[y_column]}", "Predicted", height=400
+        )
+
+        show_chart(fig_fit, key=f"{key}_fit")
+
+    with plot_col2:
+        fig_res = go.Figure()
+
+        fig_res.add_trace(
+            go.Scatter(
+                x=model["fitted"], y=model["residuals"], mode="markers",
+                text=data["State/UT"].to_numpy()[train_index],
+                marker=dict(color="#2e7d32", size=9, opacity=0.75),
+                name="Residuals",
+                hovertemplate="<b>%{text}</b><br>Fitted: %{x:,.3f}"
+                              "<br>Residual: %{y:,.3f}<extra></extra>"
+            )
+        )
+
+        fig_res.add_hline(y=0, line_dash="dash", line_color="#e57373")
+
+        fig_res = style_figure(
+            fig_res, "Residuals vs fitted values",
+            "Fitted value", "Residual", height=400
+        )
+        fig_res.update_layout(showlegend=False)
+
+        show_chart(fig_res, key=f"{key}_res")
+
+    if k == 1:
+        x_name = x_columns[0]
+
+        fig_line = go.Figure()
+
+        fig_line.add_trace(
+            go.Scatter(
+                x=data[x_name], y=data[y_column], mode="markers",
+                text=data["State/UT"],
+                marker=dict(color="#2e7d32", size=9, opacity=0.75),
+                name="States/UTs",
+                hovertemplate="<b>%{text}</b><br>x: %{x:,.3f}"
+                              "<br>y: %{y:,.3f}<extra></extra>"
+            )
+        )
+
+        x_line = np.array([data[x_name].min(), data[x_name].max()])
+
+        fig_line.add_trace(
+            go.Scatter(
+                x=x_line, y=beta[0] + beta[1] * x_line, mode="lines",
+                line=dict(color="#e57373", width=2.5),
+                name="Regression line"
+            )
+        )
+
+        fig_line = style_figure(
+            fig_line, "Regression line",
+            names[x_name], names[y_column], height=420
+        )
+
+        show_chart(fig_line, key=f"{key}_line")
+
+    # ---------------- Assumption checks ----------------
+    st.subheader("Checking the regression assumptions")
+
+    residuals = model["residuals"]
+    fitted = model["fitted"]
+
+    res_sd = residuals.std(ddof=1)
+
+    skew = (
+        float(np.mean(((residuals - residuals.mean()) / res_sd) ** 3))
+        if res_sd > 0 else float("nan")
+    )
+
+    hetero = (
+        float(np.corrcoef(np.abs(residuals), fitted)[0, 1])
+        if res_sd > 0 and fitted.std() > 0 else float("nan")
+    )
+
+    dw = durbin_watson(residuals)
+
+    check_table = pd.DataFrame({
+        "Assumption": [
+            "Linearity", "Normal residuals",
+            "Constant variance (homoscedasticity)", "Independent errors"
+        ],
+        "How we check it": [
+            "Residuals vs fitted plot should show no curve",
+            f"Residual skewness = {skew:.2f} (near 0 is good)",
+            f"Corr(|residual|, fitted) = {hetero:.2f} (near 0 is good)",
+            f"Durbin–Watson = {dw:.2f} (about 2 is good)"
+        ],
+        "Looks OK?": [
+            "Check the plot",
+            "Yes" if abs(skew) < 1 else "Doubtful",
+            "Yes" if abs(hetero) < 0.4 else "Doubtful",
+            "Yes" if 1.5 <= dw <= 2.5 else "Doubtful"
+        ]
+    })
+
+    show_table(check_table, hide_index=True)
+
+    st.caption(
+        "States/UTs are not a random sample and the raw data are strongly "
+        "right-skewed, so assumptions often fail on the raw scale. Tick "
+        "'Use log10 of the variables' to see if the fit improves."
+    )
+
+    if k > 1:
+        st.caption(
+            "With several predictors also check multicollinearity: if the "
+            "predictors are strongly correlated with each other, the "
+            "individual coefficients become unstable."
+        )
+
+    # ---------------- Interpretation ----------------
+    st.subheader("Interpretation")
+
+    r2_percent = model["r2"] * 100
+    lines = [
+        f"The model explains about **{r2_percent:.1f}%** of the variation in "
+        f"{names[y_column]} (R² = {model['r2']:.3f}, adjusted R² = "
+        f"{model['adj_r2']:.3f})."
+    ]
+
+    for i, col in enumerate(x_columns):
+        slope = beta[i + 1]
+        p_value = model["p"][i + 1]
+        significant = (not np.isnan(p_value)) and p_value < 0.05
+        direction = "increase" if slope > 0 else "decrease"
+        holding = " holding the other predictors fixed" if k > 1 else ""
+
+        if use_log:
+            effect = (
+                f"a 10-fold increase in {col} is linked with y being multiplied "
+                f"by about {10 ** slope:,.3g}{holding}"
+            )
+        else:
+            effect = (
+                f"each 1-unit increase in {col} is linked with a "
+                f"{abs(slope):,.4g}-unit {direction} in {y_column}{holding}"
+            )
+
+        status = (
+            "This effect is statistically significant at the 5% level"
+            if significant else
+            "This effect is not statistically significant at the 5% level"
+        )
+
+        lines.append(f"- {effect}. {status} (p = {show_p_value(p_value)}).")
+
+    lines.append(
+        "Regression shows association, not causation, and with only a few "
+        "dozen States/UTs the results are best used to practise the method."
+    )
+
+    st.markdown("\n\n".join(lines))
+
+    return model
+
+
+# ==========================================================
+# NEW: SHARED DECISION HELPER
+# ==========================================================
+def show_decision(p_value, alpha, claim):
+    """Two-sentence conclusion: decision about H0, then meaning in context."""
+
+    if p_value < alpha:
+        st.success(
+            f"Because the p-value ({show_p_value(p_value)}) is less than "
+            f"α = {alpha}, we **reject H₀**. There is convincing evidence "
+            f"that {claim}."
+        )
+    else:
+        st.info(
+            f"Because the p-value ({show_p_value(p_value)}) is not less than "
+            f"α = {alpha}, we **fail to reject H₀**. There is not convincing "
+            f"evidence that {claim}."
+        )
+
+
+# ==========================================================
 # LOAD DATA
 # ==========================================================
 def clean_column_name(name):
@@ -1165,9 +1718,13 @@ with st.sidebar:
             "Home",
             "Dataset Overview",
             "Statistical Analysis",
+            "Probability and Distributions",
             "Sampling and CLT",
+            "Confidence Intervals and Group Tests",
             "Hypothesis Testing",
             "Type I and Type II Errors",
+            "Regression Analysis",
+            "Analytics Workflow",
             "Maharashtra Schemes"
         ]
     )
@@ -1193,13 +1750,14 @@ if page == "Home":
         **About the Project:** This analytical platform evaluates Indian
         agricultural welfare schemes, including PM-KISAN, PMFBY, and
         agricultural landholding patterns. It uses descriptive statistics,
-        relationship analysis and statistical inference to explore regional
-        differences in scheme data.
+        probability, relationship analysis, statistical inference and
+        regression to explore regional differences in scheme data.
 
         **Objective:** To evaluate state and union-territory data, compare
         central tendency and variability, examine relationships between
-        landholding patterns and scheme-related measures, and test claims
-        about the data using sampling theory and hypothesis tests.
+        landholding patterns and scheme-related measures, test claims
+        about the data using sampling theory and hypothesis tests, and
+        build simple predictive models.
 
         **Data Sources:** Three Rajya Sabha question tables: PM-KISAN
         beneficiaries and amounts, 2018-19 to 2024-25 (Session 265);
@@ -1212,12 +1770,15 @@ if page == "Home":
         **Statistical Analysis:** Mean, median, mode, sample variance,
         sample standard deviation, interquartile range, range, covariance,
         and Pearson correlation are calculated using explicit formulas
-        and loops. Sampling distributions, the Central Limit Theorem, Z and
-        t hypothesis tests, and Type I and Type II errors are also covered.
+        and loops. Probability distributions (binomial, Poisson, normal),
+        sampling distributions, the Central Limit Theorem, confidence
+        intervals, Z and t hypothesis tests, independent and paired t-tests,
+        one-way ANOVA, Type I and Type II errors, and simple and multiple
+        linear regression with MAE, MSE, RMSE and R² are also covered.
 
         **Data Visualisation:** Interactive Plotly charts show comparisons,
-        distributions, correlation matrices, sampling distributions and
-        rejection regions.
+        distributions, correlation matrices, sampling distributions,
+        rejection regions and regression diagnostics.
         """
     )
 
@@ -1349,13 +1910,18 @@ if page == "Home":
             unsafe_allow_html=True
         )
 
-    st.header("Inference Concepts")
+    st.header("Probability and Inference Concepts")
 
     col_d, col_e, col_f = st.columns(3)
 
     with col_d:
         st.markdown(
             """
+            <div class="stat-card-light">
+                <h4>Probability &amp; Distributions</h4>
+                <p>Conditional probability, Bayes' theorem, and the binomial, Poisson and normal distributions.</p>
+            </div>
+
             <div class="stat-card-light">
                 <h4>Sampling Distribution &amp; CLT</h4>
                 <p>Sample means form a bell shape around the population mean, whatever the shape of the population, once the sample is large enough.</p>
@@ -1367,6 +1933,11 @@ if page == "Home":
     with col_e:
         st.markdown(
             """
+            <div class="stat-card-light">
+                <h4>Confidence Intervals &amp; Group Tests</h4>
+                <p>A range of plausible values for a mean, plus independent t, paired t and one-way ANOVA tests to compare groups.</p>
+            </div>
+
             <div class="stat-card-light">
                 <h4>Hypothesis Testing</h4>
                 <p>A Z-test or t-test checks whether a claim about a population mean is supported by the sample, using a p-value and a significance level α.</p>
@@ -1381,6 +1952,11 @@ if page == "Home":
             <div class="stat-card-light">
                 <h4>Type I &amp; Type II Errors</h4>
                 <p>Type I: rejecting a true H₀ (probability α). Type II: failing to reject a false H₀ (probability β).</p>
+            </div>
+
+            <div class="stat-card-light">
+                <h4>Regression &amp; Predictive Analytics</h4>
+                <p>Linear models that predict one measure from others, judged with MAE, MSE, RMSE and R².</p>
             </div>
             """,
             unsafe_allow_html=True
@@ -3207,6 +3783,1479 @@ elif page == "Maharashtra Schemes":
             file_name="maharashtra_schemes_filtered.csv",
             mime="text/csv"
         )
+
+
+# ==========================================================
+# UNIT II: PROBABILITY AND PROBABILITY DISTRIBUTIONS
+# ==========================================================
+elif page == "Probability and Distributions":
+
+    st.title("Probability and Probability Distributions")
+
+    st.write(
+        "Probability concepts, conditional probability, Bayes' theorem, "
+        "random variables and the binomial, Poisson and normal "
+        "distributions, with applications to the agricultural data."
+    )
+
+    (tab_cond, tab_bin, tab_poi, tab_norm,
+     tab_approx, tab_app) = st.tabs([
+        "Probability & Bayes",
+        "Binomial",
+        "Poisson",
+        "Normal & Z",
+        "Normal approx. to Binomial",
+        "Applications"
+    ])
+
+    # ------------------------------------------------------
+    # Probability concepts, conditional probability, Bayes
+    # ------------------------------------------------------
+    with tab_cond:
+
+        st.header("Probability Concepts")
+
+        st.markdown(
+            """
+            - **Probability** of an event A = favourable outcomes ÷ total outcomes, always between 0 and 1.
+            - **Random variable:** a numerical outcome of a random process. *Discrete* variables take countable values (number of insured farmers in a sample); *continuous* variables take any value in a range (average yield).
+            - **Conditional probability:** P(A | B) = P(A ∩ B) / P(B), the chance of A once we know B happened.
+            - **Bayes' theorem:** P(A | B) = P(B | A) × P(A) / P(B).
+            """
+        )
+
+        st.subheader("Try it on the data")
+
+        pick1, pick2, pick3 = st.columns(3)
+
+        with pick1:
+            prob_dataset = st.selectbox(
+                "Select Dataset", dataset_names, key="prob_dataset"
+            )
+
+        prob_df = datasets[prob_dataset]
+        prob_numeric = get_numeric_columns(prob_df)
+
+        if len(prob_numeric) < 2:
+            st.warning("This dataset needs at least two numerical columns.")
+
+        else:
+            with pick2:
+                prob_a = st.selectbox(
+                    "Event A: this variable is above its median",
+                    prob_numeric, key=f"prob_a_{prob_dataset}"
+                )
+
+            with pick3:
+                prob_b = st.selectbox(
+                    "Event B: this variable is above its median",
+                    prob_numeric, index=1, key=f"prob_b_{prob_dataset}"
+                )
+
+            pair = prob_df[["State/UT", prob_a, prob_b]].dropna()
+
+            if prob_a == prob_b or len(pair) < 4:
+                st.warning("Choose two different variables with enough data.")
+
+            else:
+                event_a = (pair[prob_a] > pair[prob_a].median()).to_numpy()
+                event_b = (pair[prob_b] > pair[prob_b].median()).to_numpy()
+
+                total = len(pair)
+                p_a = event_a.mean()
+                p_b = event_b.mean()
+                p_ab = (event_a & event_b).mean()
+
+                table = pd.DataFrame(
+                    {
+                        "B: above median": [
+                            int((event_a & event_b).sum()),
+                            int((~event_a & event_b).sum())
+                        ],
+                        "B: not above median": [
+                            int((event_a & ~event_b).sum()),
+                            int((~event_a & ~event_b).sum())
+                        ]
+                    },
+                    index=["A: above median", "A: not above median"]
+                )
+
+                st.write(f"Counts of States/UTs (total = {total}):")
+                show_table(table)
+
+                m1, m2, m3 = st.columns(3)
+
+                with m1:
+                    st.metric("P(A)", f"{p_a:.4f}")
+
+                with m2:
+                    st.metric("P(B)", f"{p_b:.4f}")
+
+                with m3:
+                    st.metric("P(A ∩ B)", f"{p_ab:.4f}")
+
+                if p_a > 0 and p_b > 0:
+                    p_a_given_b = p_ab / p_b
+                    p_b_given_a = p_ab / p_a
+                    bayes_value = p_b_given_a * p_a / p_b
+
+                    c1, c2, c3 = st.columns(3)
+
+                    with c1:
+                        st.metric("P(A | B)", f"{p_a_given_b:.4f}")
+
+                    with c2:
+                        st.metric("P(B | A)", f"{p_b_given_a:.4f}")
+
+                    with c3:
+                        st.metric("P(A | B) by Bayes", f"{bayes_value:.4f}")
+
+                    st.caption(
+                        "The last number uses P(B | A) × P(A) / P(B) and "
+                        "matches P(A | B), which is exactly Bayes' theorem."
+                    )
+
+                    if abs(p_ab - p_a * p_b) < 0.05:
+                        st.info(
+                            f"P(A ∩ B) = {p_ab:.3f} is close to P(A) × P(B) = "
+                            f"{p_a * p_b:.3f}, so A and B look roughly independent."
+                        )
+                    else:
+                        st.info(
+                            f"P(A ∩ B) = {p_ab:.3f} differs from P(A) × P(B) = "
+                            f"{p_a * p_b:.3f}, so A and B are not independent: "
+                            "knowing one changes the chance of the other."
+                        )
+
+        st.subheader("Bayes' theorem calculator")
+
+        st.write(
+            "Example: 2% of fields have a crop disease. A test detects the "
+            "disease 90% of the time, but also gives a false alarm on 8% of "
+            "healthy fields. If a test is positive, how likely is the field "
+            "really diseased?"
+        )
+
+        b1, b2, b3 = st.columns(3)
+
+        with b1:
+            prior = st.slider("P(disease)", 0.001, 0.5, 0.02, 0.001,
+                              format="%.3f", key="bayes_prior")
+
+        with b2:
+            sensitivity = st.slider("P(positive | disease)", 0.5, 1.0, 0.90,
+                                    0.01, key="bayes_sens")
+
+        with b3:
+            false_alarm = st.slider("P(positive | healthy)", 0.0, 0.5, 0.08,
+                                    0.01, key="bayes_fp")
+
+        p_positive = sensitivity * prior + false_alarm * (1 - prior)
+        posterior = sensitivity * prior / p_positive if p_positive > 0 else float("nan")
+
+        r1, r2 = st.columns(2)
+
+        with r1:
+            st.metric("P(positive) (total probability)", f"{p_positive:.4f}")
+
+        with r2:
+            st.metric("P(disease | positive)", f"{posterior:.4f}")
+
+        st.caption(
+            "P(positive) = P(+|D)P(D) + P(+|healthy)P(healthy). Even with a "
+            "good test, a rare disease means many positives are false alarms. "
+            "Raise P(disease) and watch the posterior jump."
+        )
+
+    # ------------------------------------------------------
+    # Binomial
+    # ------------------------------------------------------
+    with tab_bin:
+
+        st.header("Binomial Distribution")
+
+        st.write(
+            "A fixed number n of independent trials, each with success "
+            "probability p. Example: n farmers are checked, and each is "
+            "insured with probability p."
+        )
+
+        st.latex(r"P(X=k)=\binom{n}{k}p^{k}(1-p)^{n-k}")
+
+        bn1, bn2, bn3 = st.columns(3)
+
+        with bn1:
+            bin_n = st.slider("Number of trials (n)", 1, 200, 20, key="bin_n")
+
+        with bn2:
+            bin_p = st.slider("Success probability (p)", 0.01, 0.99, 0.30,
+                              0.01, key="bin_p")
+
+        with bn3:
+            bin_k = st.slider("Value of k", 0, bin_n, min(6, bin_n), key=f"bin_k_{bin_n}")
+
+        bin_mode = st.radio(
+            "Probability to find", ["P(X = k)", "P(X ≤ k)", "P(X ≥ k)"],
+            horizontal=True, key="bin_mode"
+        )
+
+        bin_all = [binomial_pmf(i, bin_n, bin_p) for i in range(bin_n + 1)]
+
+        if bin_mode == "P(X = k)":
+            bin_value = bin_all[bin_k]
+            bin_highlight = {bin_k}
+        elif bin_mode == "P(X ≤ k)":
+            bin_value = sum(bin_all[: bin_k + 1])
+            bin_highlight = set(range(0, bin_k + 1))
+        else:
+            bin_value = sum(bin_all[bin_k:])
+            bin_highlight = set(range(bin_k, bin_n + 1))
+
+        bin_mean = bin_n * bin_p
+        bin_var = bin_n * bin_p * (1 - bin_p)
+
+        s1, s2, s3 = st.columns(3)
+
+        with s1:
+            st.metric(bin_mode, f"{bin_value:.4f}")
+
+        with s2:
+            st.metric("Mean = np", f"{bin_mean:.3f}")
+
+        with s3:
+            st.metric("Variance = np(1−p)", f"{bin_var:.3f}")
+
+        low = max(0, int(bin_mean - 5 * math.sqrt(bin_var)) - 1)
+        high = min(bin_n, int(bin_mean + 5 * math.sqrt(bin_var)) + 1)
+        window = list(range(low, high + 1))
+
+        bar_pmf_chart(
+            window, [bin_all[i] for i in window], bin_highlight,
+            f"Binomial(n = {bin_n}, p = {bin_p})", "Number of successes (X)",
+            "bin_chart"
+        )
+
+        st.caption(
+            "Dark bars add up to the probability you selected. The "
+            "distribution is symmetric when p = 0.5 and skewed otherwise."
+        )
+
+    # ------------------------------------------------------
+    # Poisson
+    # ------------------------------------------------------
+    with tab_poi:
+
+        st.header("Poisson Distribution")
+
+        st.write(
+            "Counts of events in a fixed interval when events happen "
+            "independently at a constant average rate λ. Example: the number "
+            "of crop-insurance claims arriving at a district office per day."
+        )
+
+        st.latex(r"P(X=k)=\frac{e^{-\lambda}\lambda^{k}}{k!}")
+
+        po1, po2 = st.columns(2)
+
+        with po1:
+            poi_lambda = st.slider("Average rate (λ)", 0.5, 30.0, 4.0, 0.5,
+                                   key="poi_lambda")
+
+        with po2:
+            poi_k = st.slider("Value of k", 0, 60, 5, key="poi_k")
+
+        poi_mode = st.radio(
+            "Probability to find", ["P(X = k)", "P(X ≤ k)", "P(X ≥ k)"],
+            horizontal=True, key="poi_mode"
+        )
+
+        poi_limit = int(poi_lambda + 6 * math.sqrt(poi_lambda) + 10)
+        poi_all = [poisson_pmf(i, poi_lambda) for i in range(poi_limit + 1)]
+
+        if poi_mode == "P(X = k)":
+            poi_value = poisson_pmf(poi_k, poi_lambda)
+            poi_highlight = {poi_k}
+        elif poi_mode == "P(X ≤ k)":
+            poi_value = sum(poisson_pmf(i, poi_lambda) for i in range(poi_k + 1))
+            poi_highlight = set(range(0, poi_k + 1))
+        else:
+            poi_value = 1 - sum(poisson_pmf(i, poi_lambda) for i in range(poi_k))
+            poi_highlight = set(range(poi_k, poi_limit + 1))
+
+        q1, q2, q3 = st.columns(3)
+
+        with q1:
+            st.metric(poi_mode, f"{poi_value:.4f}")
+
+        with q2:
+            st.metric("Mean = λ", f"{poi_lambda:.2f}")
+
+        with q3:
+            st.metric("Variance = λ", f"{poi_lambda:.2f}")
+
+        bar_pmf_chart(
+            list(range(poi_limit + 1)), poi_all, poi_highlight,
+            f"Poisson(λ = {poi_lambda})", "Number of events (X)", "poi_chart"
+        )
+
+        st.caption(
+            "A Poisson distribution has its mean equal to its variance. For "
+            "large λ it starts to look like a bell curve."
+        )
+
+    # ------------------------------------------------------
+    # Normal and standard normal
+    # ------------------------------------------------------
+    with tab_norm:
+
+        st.header("Normal and Standard Normal (Z) Distribution")
+
+        st.latex(r"Z=\frac{X-\mu}{\sigma}")
+
+        n1, n2 = st.columns(2)
+
+        with n1:
+            norm_mu = st.number_input("Mean (μ)", value=800.0, key="norm_mu")
+
+        with n2:
+            norm_sigma = st.number_input(
+                "Standard deviation (σ)", value=40.0, min_value=0.01,
+                key="norm_sigma"
+            )
+
+        norm_mode = st.radio(
+            "Probability to find",
+            ["P(X < a)", "P(X > a)", "P(a < X < b)"],
+            horizontal=True, key="norm_mode"
+        )
+
+        na1, na2 = st.columns(2)
+
+        with na1:
+            norm_a = st.number_input("a", value=775.0, key="norm_a")
+
+        with na2:
+            norm_b = st.number_input("b (used for the interval)",
+                                     value=850.0, key="norm_b")
+
+        z_a = (norm_a - norm_mu) / norm_sigma
+        z_b = (norm_b - norm_mu) / norm_sigma
+
+        if norm_mode == "P(X < a)":
+            norm_value = normal.cdf(z_a)
+        elif norm_mode == "P(X > a)":
+            norm_value = 1 - normal.cdf(z_a)
+        else:
+            norm_value = normal.cdf(z_b) - normal.cdf(z_a)
+
+        if norm_mode == "P(a < X < b)" and norm_b <= norm_a:
+            st.warning("b must be larger than a for an interval.")
+
+        w1, w2, w3 = st.columns(3)
+
+        with w1:
+            st.metric("z for a", f"{z_a:.4f}")
+
+        with w2:
+            st.metric("z for b", f"{z_b:.4f}")
+
+        with w3:
+            st.metric(norm_mode, f"{max(norm_value, 0):.4f}")
+
+        def norm_pdf(values):
+            return z_pdf((np.asarray(values, dtype=float) - norm_mu) / norm_sigma) / norm_sigma
+
+        x_low = norm_mu - 4 * norm_sigma
+        x_high = norm_mu + 4 * norm_sigma
+        x_grid = np.linspace(x_low, x_high, 500)
+
+        fig_norm = go.Figure()
+
+        fig_norm.add_trace(
+            go.Scatter(
+                x=x_grid, y=norm_pdf(x_grid), mode="lines",
+                line=dict(color="#2e7d32", width=2.5), name="Normal curve"
+            )
+        )
+
+        fill = "rgba(229, 115, 115, 0.55)"
+
+        if norm_mode == "P(X < a)":
+            shade_between(fig_norm, norm_pdf, x_low, min(norm_a, x_high),
+                          fill, "Probability", True)
+        elif norm_mode == "P(X > a)":
+            shade_between(fig_norm, norm_pdf, max(norm_a, x_low), x_high,
+                          fill, "Probability", True)
+        else:
+            shade_between(fig_norm, norm_pdf, max(norm_a, x_low),
+                          min(norm_b, x_high), fill, "Probability", True)
+
+        fig_norm = style_figure(
+            fig_norm, "Normal distribution", "X", "Density", height=400
+        )
+
+        show_chart(fig_norm, key="norm_chart")
+
+        rule_rows = pd.DataFrame({
+            "Range": ["μ ± 1σ", "μ ± 2σ", "μ ± 3σ"],
+            "Probability": [
+                f"{normal.cdf(k) - normal.cdf(-k):.4f}" for k in (1, 2, 3)
+            ]
+        })
+
+        st.write("The empirical (68–95–99.7) rule:")
+        show_table(rule_rows, hide_index=True)
+
+    # ------------------------------------------------------
+    # Normal approximation to the binomial
+    # ------------------------------------------------------
+    with tab_approx:
+
+        st.header("Normal Approximation to the Binomial")
+
+        st.write(
+            "When n is large, Binomial(n, p) is close to a normal curve with "
+            "mean np and standard deviation √(np(1−p)). A continuity "
+            "correction (±0.5) improves the match."
+        )
+
+        ap1, ap2 = st.columns(2)
+
+        with ap1:
+            ap_n = st.slider("Number of trials (n)", 10, 500, 100, key="ap_n")
+
+        with ap2:
+            ap_p = st.slider("Success probability (p)", 0.01, 0.99, 0.30,
+                             0.01, key="ap_p")
+
+        ap_k = st.slider(
+            "Find P(X ≤ k) for k =", 0, ap_n, int(ap_n * ap_p),
+            key=f"ap_k_{ap_n}"
+        )
+
+        ap_mean = ap_n * ap_p
+        ap_sd = math.sqrt(ap_n * ap_p * (1 - ap_p))
+
+        exact = sum(binomial_pmf(i, ap_n, ap_p) for i in range(ap_k + 1))
+        with_correction = normal.cdf((ap_k + 0.5 - ap_mean) / ap_sd)
+        without_correction = normal.cdf((ap_k - ap_mean) / ap_sd)
+
+        e1, e2, e3 = st.columns(3)
+
+        with e1:
+            st.metric("Exact binomial", f"{exact:.4f}")
+
+        with e2:
+            st.metric("Normal, with correction", f"{with_correction:.4f}")
+
+        with e3:
+            st.metric("Normal, no correction", f"{without_correction:.4f}")
+
+        if ap_n * ap_p >= 5 and ap_n * (1 - ap_p) >= 5:
+            st.success(
+                f"np = {ap_n * ap_p:.1f} and n(1−p) = {ap_n * (1 - ap_p):.1f} "
+                "are both at least 5, so the approximation is reliable."
+            )
+        else:
+            st.warning(
+                f"np = {ap_n * ap_p:.1f} and n(1−p) = {ap_n * (1 - ap_p):.1f}: "
+                "at least one is below 5, so the normal approximation may be poor."
+            )
+
+        ap_low = max(0, int(ap_mean - 4 * ap_sd))
+        ap_high = min(ap_n, int(ap_mean + 4 * ap_sd) + 1)
+        ap_ks = list(range(ap_low, ap_high + 1))
+        ap_curve_x = np.linspace(ap_low - 0.5, ap_high + 0.5, 300)
+
+        fig_ap = go.Figure()
+
+        fig_ap.add_trace(
+            go.Bar(
+                x=ap_ks, y=[binomial_pmf(i, ap_n, ap_p) for i in ap_ks],
+                marker_color="#a5d6a7",
+                marker_line=dict(color="#4caf50", width=1),
+                name="Binomial"
+            )
+        )
+
+        fig_ap.add_trace(
+            go.Scatter(
+                x=ap_curve_x,
+                y=z_pdf((ap_curve_x - ap_mean) / ap_sd) / ap_sd,
+                mode="lines", line=dict(color="#e57373", width=2.5),
+                name="Normal curve"
+            )
+        )
+
+        fig_ap = style_figure(
+            fig_ap, "Binomial bars and the normal curve",
+            "X", "Probability", height=400
+        )
+
+        show_chart(fig_ap, key="ap_chart")
+
+    # ------------------------------------------------------
+    # Applications
+    # ------------------------------------------------------
+    with tab_app:
+
+        st.header("Applications of Probability in Data Analytics")
+
+        st.write(
+            "Probability turns data into risk statements. Below, a variable "
+            "is used to answer 'how likely is a State/UT to exceed a "
+            "threshold?' in two ways: counting, and using a fitted normal "
+            "model."
+        )
+
+        ap_c1, ap_c2 = st.columns(2)
+
+        with ap_c1:
+            app_dataset = st.selectbox(
+                "Select Dataset", dataset_names, key="app_dataset"
+            )
+
+        app_df = datasets[app_dataset]
+        app_numeric = get_numeric_columns(app_df)
+
+        with ap_c2:
+            app_column = st.selectbox(
+                "Select Variable", app_numeric, key=f"app_var_{app_dataset}"
+            )
+
+        app_stats = calculate_descriptive_statistics(app_df[app_column])
+
+        if app_stats is None or app_stats["n"] < 5 or app_stats["std"] == 0:
+            st.warning("Not enough varied data for this variable.")
+
+        else:
+            threshold = st.number_input(
+                "Threshold (c)", value=float(round(app_stats["median"], 2)),
+                step=float(max(app_stats["std"] / 10, 0.01)),
+                key=f"app_c_{app_dataset}_{app_column}"
+            )
+
+            values_array = np.array(app_stats["values"])
+            empirical = float(np.mean(values_array > threshold))
+            model_value = 1 - NormalDist(
+                app_stats["mean"], app_stats["std"]
+            ).cdf(threshold)
+
+            a1, a2, a3 = st.columns(3)
+
+            with a1:
+                st.metric("Empirical P(X > c)", f"{empirical:.4f}")
+
+            with a2:
+                st.metric("Normal model P(X > c)", f"{model_value:.4f}")
+
+            with a3:
+                st.metric("z of threshold",
+                          f"{(threshold - app_stats['mean']) / app_stats['std']:.3f}")
+
+            st.caption(
+                "If the two probabilities differ a lot, the data are not "
+                "normal. Counts and amounts across States/UTs are usually "
+                "right-skewed, so the normal model can mislead."
+            )
+
+            st.subheader("Binomial application")
+
+            m_col1, m_col2 = st.columns(2)
+
+            with m_col1:
+                m_states = st.slider("States/UTs picked at random (m)", 2, 30,
+                                     10, key="app_m")
+
+            with m_col2:
+                j_states = st.slider("At least j exceed the threshold", 0,
+                                     m_states, min(3, m_states),
+                                     key=f"app_j_{m_states}")
+
+            p_at_least = sum(
+                binomial_pmf(i, m_states, empirical)
+                for i in range(j_states, m_states + 1)
+            )
+
+            st.metric(
+                f"P(at least {j_states} of {m_states} exceed c)",
+                f"{p_at_least:.4f}"
+            )
+
+            st.caption(
+                f"Using p = {empirical:.3f} from the data and a binomial "
+                "model (picks treated as independent)."
+            )
+
+
+# ==========================================================
+# UNIT III: CONFIDENCE INTERVALS AND GROUP TESTS
+# ==========================================================
+elif page == "Confidence Intervals and Group Tests":
+
+    st.title("Confidence Intervals and Group Tests")
+
+    st.write(
+        "Estimate a population mean with a confidence interval, and compare "
+        "groups with the independent t-test, paired t-test and one-way ANOVA."
+    )
+
+    gt_dataset = st.selectbox(
+        "Select Dataset", dataset_names, key="gt_dataset"
+    )
+
+    gt_df = datasets[gt_dataset]
+    gt_numeric = get_numeric_columns(gt_df)
+
+    tab_ci, tab_ind, tab_pair, tab_anova = st.tabs([
+        "Confidence interval",
+        "Independent t-test",
+        "Paired t-test",
+        "One-way ANOVA"
+    ])
+
+    # ------------------------------------------------------
+    # Confidence interval
+    # ------------------------------------------------------
+    with tab_ci:
+
+        ci_column = st.selectbox(
+            "Select Variable", gt_numeric, key=f"ci_var_{gt_dataset}"
+        )
+
+        ci_stats = calculate_descriptive_statistics(gt_df[ci_column])
+
+        if ci_stats is None or ci_stats["n"] < 3 or ci_stats["std"] == 0:
+            st.warning("This variable needs at least three varied values.")
+
+        else:
+            ci1, ci2 = st.columns(2)
+
+            with ci1:
+                ci_level = st.radio(
+                    "Confidence level", [0.90, 0.95, 0.99], index=1,
+                    horizontal=True, key="ci_level"
+                )
+
+            with ci2:
+                ci_method = st.radio(
+                    "Method", ["t (σ unknown)", "Z (σ known)"],
+                    horizontal=True, key="ci_method"
+                )
+
+            if ci_method == "Z (σ known)":
+                ci_spread = st.number_input(
+                    "Known population standard deviation (σ)",
+                    value=float(max(round(ci_stats["std"], 2), 0.01)),
+                    min_value=0.01, key=f"ci_sigma_{gt_dataset}_{ci_column}"
+                )
+            else:
+                ci_spread = ci_stats["std"]
+
+            lower, upper, critical, margin = confidence_interval_for_mean(
+                ci_stats["mean"], ci_spread, ci_stats["n"], ci_level, ci_method
+            )
+
+            st.latex(
+                r"\bar{x}\ \pm\ (z^{*}\ \text{or}\ t^{*})\times\frac{s}{\sqrt{n}}"
+            )
+
+            k1, k2, k3, k4 = st.columns(4)
+
+            with k1:
+                st.metric("Sample mean", short_number(ci_stats["mean"]))
+
+            with k2:
+                st.metric("Critical value", f"{critical:.4f}")
+
+            with k3:
+                st.metric("Margin of error", short_number(margin))
+
+            with k4:
+                st.metric(
+                    f"{int(ci_level * 100)}% interval",
+                    f"{short_number(lower)} to {short_number(upper)}"
+                )
+
+            fig_ci = go.Figure()
+
+            fig_ci.add_trace(
+                go.Scatter(
+                    x=[ci_stats["mean"]], y=["Mean"], mode="markers",
+                    marker=dict(color="#2e7d32", size=12),
+                    error_x=dict(type="constant", value=margin,
+                                 color="#2e7d32", thickness=3),
+                    name="Interval"
+                )
+            )
+
+            fig_ci = style_figure(
+                fig_ci, f"{int(ci_level * 100)}% confidence interval",
+                ci_column, "", height=220
+            )
+            fig_ci.update_layout(showlegend=False)
+
+            show_chart(fig_ci, key="ci_chart")
+
+            st.caption(
+                f"We are {int(ci_level * 100)}% confident that the true mean "
+                "lies in this interval. The confidence is in the method: if "
+                "we repeated the sampling many times, about "
+                f"{int(ci_level * 100)}% of such intervals would contain the "
+                "true mean."
+            )
+
+            width_rows = []
+
+            for level in [0.90, 0.95, 0.99]:
+                lo, hi, crit, mar = confidence_interval_for_mean(
+                    ci_stats["mean"], ci_spread, ci_stats["n"], level, ci_method
+                )
+                width_rows.append({
+                    "Confidence level": f"{int(level * 100)}%",
+                    "Critical value": f"{crit:.4f}",
+                    "Lower": short_number(lo),
+                    "Upper": short_number(hi),
+                    "Width": short_number(hi - lo)
+                })
+
+            show_table(pd.DataFrame(width_rows), hide_index=True)
+
+            st.caption(
+                "A higher confidence level gives a wider interval: more "
+                "certainty costs precision. A larger sample makes it narrower."
+            )
+
+    # ------------------------------------------------------
+    # Independent t-test
+    # ------------------------------------------------------
+    with tab_ind:
+
+        if len(gt_numeric) < 2:
+            st.warning("This dataset needs at least two numerical columns.")
+
+        else:
+            st.write(
+                "Compare the means of two independent groups. Here each "
+                "selected column is one group of State/UT values."
+            )
+
+            i1, i2 = st.columns(2)
+
+            with i1:
+                ind_a = st.selectbox("Group 1", gt_numeric,
+                                     key=f"ind_a_{gt_dataset}")
+
+            with i2:
+                ind_b = st.selectbox("Group 2", gt_numeric, index=1,
+                                     key=f"ind_b_{gt_dataset}")
+
+            i3, i4, i5 = st.columns(3)
+
+            with i3:
+                ind_equal = st.radio(
+                    "Variances", ["Unequal (Welch)", "Equal (pooled)"],
+                    horizontal=True, key="ind_equal"
+                )
+
+            with i4:
+                ind_tail = st.radio(
+                    "Alternative hypothesis",
+                    ["two-tailed", "right-tailed", "left-tailed"],
+                    horizontal=True, key="ind_tail"
+                )
+
+            with i5:
+                ind_alpha = st.radio(
+                    "Significance level (α)", [0.01, 0.05, 0.10], index=1,
+                    horizontal=True, key="ind_alpha"
+                )
+
+            use_log_ind = st.checkbox(
+                "Use log10 of the values (helps with skewed data)",
+                value=False, key="ind_log"
+            )
+
+            group_a = gt_df[ind_a].dropna()
+            group_b = gt_df[ind_b].dropna()
+
+            if use_log_ind:
+                group_a = np.log10(group_a[group_a > 0])
+                group_b = np.log10(group_b[group_b > 0])
+
+            stats_a = calculate_descriptive_statistics(pd.Series(group_a))
+            stats_b = calculate_descriptive_statistics(pd.Series(group_b))
+
+            if (
+                ind_a == ind_b or stats_a is None or stats_b is None
+                or stats_a["n"] < 2 or stats_b["n"] < 2
+            ):
+                st.warning("Choose two different columns with at least two values each.")
+
+            else:
+                n_a, n_b = stats_a["n"], stats_b["n"]
+                var_a, var_b = stats_a["variance"], stats_b["variance"]
+
+                if ind_equal == "Equal (pooled)":
+                    pooled = ((n_a - 1) * var_a + (n_b - 1) * var_b) / (n_a + n_b - 2)
+                    ind_se = math.sqrt(pooled * (1 / n_a + 1 / n_b))
+                    ind_df = n_a + n_b - 2
+                else:
+                    ind_se = math.sqrt(var_a / n_a + var_b / n_b)
+                    ind_df = (
+                        (var_a / n_a + var_b / n_b) ** 2
+                        / ((var_a / n_a) ** 2 / (n_a - 1)
+                           + (var_b / n_b) ** 2 / (n_b - 1))
+                    )
+
+                difference = stats_a["mean"] - stats_b["mean"]
+                t_stat = difference / ind_se if ind_se > 0 else float("nan")
+
+                if math.isnan(t_stat):
+                    st.warning("The standard error is zero, so the test cannot run.")
+
+                else:
+                    p_ind = calculate_p_value(t_stat, ind_tail, "t-test", ind_df)
+
+                    symbol = {"two-tailed": "≠", "right-tailed": ">",
+                              "left-tailed": "<"}[ind_tail]
+                    phrase = {"two-tailed": "different from",
+                              "right-tailed": "greater than",
+                              "left-tailed": "less than"}[ind_tail]
+
+                    st.subheader("Hypotheses")
+                    st.markdown(f"- **H₀:** μ₁ = μ₂\n- **Hₐ:** μ₁ {symbol} μ₂")
+
+                    st.latex(
+                        r"t=\frac{\bar{x}_1-\bar{x}_2}{SE},\quad "
+                        r"SE=\sqrt{\frac{s_1^2}{n_1}+\frac{s_2^2}{n_2}}\ \text{(Welch)}"
+                    )
+
+                    r1, r2, r3, r4 = st.columns(4)
+
+                    with r1:
+                        st.metric("Mean 1 − Mean 2", short_number(difference))
+
+                    with r2:
+                        st.metric(f"t (df = {ind_df:.1f})", f"{t_stat:.4f}")
+
+                    with r3:
+                        st.metric("p-value", show_p_value(p_ind))
+
+                    with r4:
+                        crit_two = t_critical_value(0.025, ind_df)
+                        st.metric(
+                            "95% CI for difference",
+                            f"{short_number(difference - crit_two * ind_se)} to "
+                            f"{short_number(difference + crit_two * ind_se)}"
+                        )
+
+                    show_table(
+                        pd.DataFrame({
+                            "Group": [ind_a, ind_b],
+                            "n": [n_a, n_b],
+                            "Mean": [short_number(stats_a["mean"]),
+                                     short_number(stats_b["mean"])],
+                            "Std. deviation": [short_number(stats_a["std"]),
+                                               short_number(stats_b["std"])]
+                        }),
+                        hide_index=True
+                    )
+
+                    fig_ind = go.Figure()
+
+                    for label, values in [("Group 1", group_a), ("Group 2", group_b)]:
+                        fig_ind.add_trace(
+                            go.Box(y=values, name=label, boxpoints="all",
+                                   jitter=0.4, pointpos=0)
+                        )
+
+                    fig_ind = style_figure(
+                        fig_ind, "Comparing the two groups", "",
+                        "log10(value)" if use_log_ind else "Value", height=380
+                    )
+
+                    show_chart(fig_ind, key="ind_chart")
+
+                    show_decision(
+                        p_ind, ind_alpha,
+                        f"the mean of group 1 ({ind_a}) is {phrase} the mean "
+                        f"of group 2 ({ind_b})"
+                    )
+
+                    st.caption(
+                        "The independent t-test assumes the two groups are "
+                        "unrelated. Columns for the same States/UTs are "
+                        "really paired, so use the Paired t-test tab for "
+                        "those. The data are skewed, so also try the log10 "
+                        "option."
+                    )
+
+    # ------------------------------------------------------
+    # Paired t-test
+    # ------------------------------------------------------
+    with tab_pair:
+
+        if len(gt_numeric) < 2:
+            st.warning("This dataset needs at least two numerical columns.")
+
+        else:
+            st.write(
+                "Compare two measurements on the same States/UTs (for "
+                "example, beneficiaries in two years). The test works on the "
+                "difference for each State/UT."
+            )
+
+            p1, p2 = st.columns(2)
+
+            with p1:
+                pair_a = st.selectbox("First measurement", gt_numeric,
+                                      key=f"pair_a_{gt_dataset}")
+
+            with p2:
+                pair_b = st.selectbox("Second measurement", gt_numeric, index=1,
+                                      key=f"pair_b_{gt_dataset}")
+
+            p3, p4, p5 = st.columns(3)
+
+            with p3:
+                pair_tail = st.radio(
+                    "Alternative hypothesis",
+                    ["two-tailed", "right-tailed", "left-tailed"],
+                    horizontal=True, key="pair_tail"
+                )
+
+            with p4:
+                pair_alpha = st.radio(
+                    "Significance level (α)", [0.01, 0.05, 0.10], index=1,
+                    horizontal=True, key="pair_alpha"
+                )
+
+            with p5:
+                pair_log = st.checkbox(
+                    "Use log10 of the values", value=False, key="pair_log"
+                )
+
+            paired = gt_df[["State/UT", pair_a, pair_b]].dropna()
+
+            if pair_log:
+                paired = paired[(paired[pair_a] > 0) & (paired[pair_b] > 0)].copy()
+                paired[pair_a] = np.log10(paired[pair_a])
+                paired[pair_b] = np.log10(paired[pair_b])
+
+            differences = paired[pair_a] - paired[pair_b]
+            diff_stats = (
+                calculate_descriptive_statistics(differences)
+                if len(paired) >= 2 else None
+            )
+
+            if pair_a == pair_b or diff_stats is None or diff_stats["std"] == 0:
+                st.warning(
+                    "Choose two different columns with at least two complete "
+                    "pairs whose differences are not all identical."
+                )
+
+            else:
+                st.write(
+                    f"Using **{diff_stats['n']}** complete pairs. Differences "
+                    "are (first − second)."
+                )
+
+                fig_pair = go.Figure()
+
+                fig_pair.add_trace(
+                    go.Scatter(
+                        x=paired[pair_b], y=paired[pair_a], mode="markers",
+                        text=paired["State/UT"],
+                        marker=dict(color="#2e7d32", size=9, opacity=0.75),
+                        name="States/UTs",
+                        hovertemplate="<b>%{text}</b><br>Second: %{x:,.2f}"
+                                      "<br>First: %{y:,.2f}<extra></extra>"
+                    )
+                )
+
+                axis_min = float(min(paired[pair_a].min(), paired[pair_b].min()))
+                axis_max = float(max(paired[pair_a].max(), paired[pair_b].max()))
+
+                fig_pair.add_trace(
+                    go.Scatter(
+                        x=[axis_min, axis_max], y=[axis_min, axis_max],
+                        mode="lines", line=dict(color="#e57373", dash="dash"),
+                        name="No difference (y = x)"
+                    )
+                )
+
+                fig_pair = style_figure(
+                    fig_pair, "Paired values (points on the line = no change)",
+                    "Second measurement", "First measurement", height=400
+                )
+
+                show_chart(fig_pair, key="pair_chart")
+
+                show_mean_test(
+                    diff_stats["mean"], diff_stats["n"], 0.0, "t-test",
+                    pair_tail, pair_alpha, diff_stats["std"],
+                    f"the difference ({pair_a} − {pair_b})"
+                )
+
+    # ------------------------------------------------------
+    # One-way ANOVA
+    # ------------------------------------------------------
+    with tab_anova:
+
+        st.write(
+            "One-way ANOVA tests whether three or more group means are all "
+            "equal. Each selected column is treated as one group."
+        )
+
+        if len(gt_numeric) < 3:
+            st.warning("This dataset needs at least three numerical columns.")
+
+        else:
+            anova_columns = st.multiselect(
+                "Choose the groups (columns)", gt_numeric,
+                default=gt_numeric[:3], key=f"anova_cols_{gt_dataset}"
+            )
+
+            a1, a2 = st.columns(2)
+
+            with a1:
+                anova_alpha = st.radio(
+                    "Significance level (α)", [0.01, 0.05, 0.10], index=1,
+                    horizontal=True, key="anova_alpha"
+                )
+
+            with a2:
+                anova_log = st.checkbox(
+                    "Use log10 of the values (recommended for skewed data)",
+                    value=True, key="anova_log"
+                )
+
+            groups = []
+
+            for column in anova_columns:
+                series = gt_df[column].dropna()
+
+                if anova_log:
+                    series = np.log10(series[series > 0])
+
+                if len(series) >= 2:
+                    groups.append((column, np.asarray(series, dtype=float)))
+
+            if len(groups) < 3:
+                st.info("Select at least three columns that each have two or more values.")
+
+            else:
+                group_count = len(groups)
+                total_count = sum(len(values) for _, values in groups)
+                grand_mean = sum(values.sum() for _, values in groups) / total_count
+
+                ss_between = sum(
+                    len(values) * (values.mean() - grand_mean) ** 2
+                    for _, values in groups
+                )
+                ss_within = sum(
+                    float(np.sum((values - values.mean()) ** 2))
+                    for _, values in groups
+                )
+
+                df_between = group_count - 1
+                df_within = total_count - group_count
+
+                ms_between = ss_between / df_between
+                ms_within = ss_within / df_within if df_within > 0 else float("nan")
+
+                if not ms_within or math.isnan(ms_within) or ms_within <= 0:
+                    st.warning("The within-group variation is zero, so ANOVA cannot run.")
+
+                else:
+                    f_stat = ms_between / ms_within
+                    p_anova = f_upper_tail(f_stat, df_between, df_within)
+
+                    st.subheader("Hypotheses")
+                    st.markdown(
+                        "- **H₀:** all group means are equal\n"
+                        "- **Hₐ:** at least one group mean is different"
+                    )
+
+                    st.latex(r"F=\frac{MS_{between}}{MS_{within}}")
+
+                    anova_table = pd.DataFrame({
+                        "Source": ["Between groups", "Within groups", "Total"],
+                        "Sum of squares": [f"{ss_between:,.4f}", f"{ss_within:,.4f}",
+                                           f"{ss_between + ss_within:,.4f}"],
+                        "df": [df_between, df_within, df_between + df_within],
+                        "Mean square": [f"{ms_between:,.4f}", f"{ms_within:,.4f}", ""],
+                        "F": [f"{f_stat:.4f}", "", ""],
+                        "p-value": [show_p_value(p_anova), "", ""]
+                    })
+
+                    show_table(anova_table, hide_index=True)
+
+                    fig_anova = go.Figure()
+
+                    for column, values in groups:
+                        fig_anova.add_trace(
+                            go.Box(y=values, name=column[:28], boxpoints="all",
+                                   jitter=0.4, pointpos=0)
+                        )
+
+                    fig_anova = style_figure(
+                        fig_anova, "Distribution of each group", "",
+                        "log10(value)" if anova_log else "Value", height=420
+                    )
+                    fig_anova.update_layout(showlegend=False)
+
+                    show_chart(fig_anova, key="anova_chart")
+
+                    show_decision(
+                        p_anova, anova_alpha,
+                        "at least one group mean is different from the others"
+                    )
+
+                    st.caption(
+                        "ANOVA assumes independent groups, roughly normal "
+                        "data and similar spread. Columns holding different "
+                        "years for the same States/UTs are not independent, "
+                        "so treat this as practice with the method. A "
+                        "significant F only says that some means differ, not "
+                        "which ones."
+                    )
+
+
+# ==========================================================
+# UNIT IV: REGRESSION ANALYSIS
+# ==========================================================
+elif page == "Regression Analysis":
+
+    st.title("Regression Analysis and Predictive Analytics")
+
+    st.write(
+        "Build simple and multiple linear regression models, judge them "
+        "with MAE, MSE, RMSE and R², and check the regression assumptions."
+    )
+
+    st.markdown(
+        """
+        - **Review of correlation:** r measures the strength of a straight-line relationship.
+        - **Simple linear regression:** ŷ = b₀ + b₁x, with slope b₁ = Cov(x, y) / Var(x).
+        - **Multiple linear regression:** ŷ = b₀ + b₁x₁ + b₂x₂ + … fitted by least squares.
+        - **Assumptions:** linearity, independent errors, normal residuals, constant variance (and low multicollinearity for several predictors).
+        """
+    )
+
+    reg_dataset = st.selectbox(
+        "Select Dataset", dataset_names, key="reg_dataset"
+    )
+
+    reg_df = datasets[reg_dataset]
+    reg_numeric = get_numeric_columns(reg_df)
+
+    if len(reg_numeric) < 2:
+        st.warning("This dataset needs at least two numerical columns.")
+
+    else:
+        opt1, opt2 = st.columns(2)
+
+        with opt1:
+            reg_log = st.checkbox(
+                "Use log10 of the variables (recommended: the data are strongly right-skewed)",
+                value=True, key="reg_log"
+            )
+
+        with opt2:
+            reg_test_share = st.slider(
+                "Share of States/UTs kept aside as a test set", 0.0, 0.4, 0.0,
+                0.05, key="reg_test_share"
+            )
+
+        tab_simple, tab_multiple = st.tabs([
+            "Simple linear regression", "Multiple linear regression"
+        ])
+
+        with tab_simple:
+
+            s1, s2 = st.columns(2)
+
+            with s1:
+                simple_x = st.selectbox(
+                    "Predictor (x)", reg_numeric, key=f"simple_x_{reg_dataset}"
+                )
+
+            with s2:
+                simple_y = st.selectbox(
+                    "Response (y)", reg_numeric, index=1,
+                    key=f"simple_y_{reg_dataset}"
+                )
+
+            if simple_x == simple_y:
+                st.warning("Choose two different variables.")
+            else:
+                run_regression(
+                    reg_df, [simple_x], simple_y, reg_log, reg_test_share,
+                    key="simple"
+                )
+
+        with tab_multiple:
+
+            multi_y = st.selectbox(
+                "Response (y)", reg_numeric, key=f"multi_y_{reg_dataset}"
+            )
+
+            multi_options = [c for c in reg_numeric if c != multi_y]
+
+            multi_x = st.multiselect(
+                "Predictors (x)", multi_options,
+                default=multi_options[:2],
+                key=f"multi_x_{reg_dataset}_{multi_y}"
+            )
+
+            if len(multi_x) < 2:
+                st.info("Select at least two predictors for multiple regression.")
+            else:
+                run_regression(
+                    reg_df, multi_x, multi_y, reg_log, reg_test_share,
+                    key="multi"
+                )
+
+
+# ==========================================================
+# END-TO-END DATA ANALYTICS WORKFLOW
+# ==========================================================
+elif page == "Analytics Workflow":
+
+    st.title("End-to-End Data Analytics Workflow")
+
+    st.write(
+        "Follow the full process on one dataset: select the data, explore "
+        "it, analyse it statistically, build a regression model, and "
+        "interpret the result."
+    )
+
+    wf_c1, wf_c2 = st.columns(2)
+
+    with wf_c1:
+        wf_dataset = st.selectbox(
+            "1. Dataset selection", dataset_names, key="wf_dataset"
+        )
+
+    wf_df = datasets[wf_dataset]
+    wf_numeric = get_numeric_columns(wf_df)
+
+    if len(wf_numeric) < 2:
+        st.warning("This dataset needs at least two numerical columns.")
+
+    else:
+        with wf_c2:
+            wf_target = st.selectbox(
+                "Target variable (y)", wf_numeric, key=f"wf_target_{wf_dataset}"
+            )
+
+        wf_options = [c for c in wf_numeric if c != wf_target]
+
+        wf_predictors = st.multiselect(
+            "Predictor variables (x)", wf_options,
+            default=wf_options[:1], key=f"wf_pred_{wf_dataset}_{wf_target}"
+        )
+
+        wf_log = st.checkbox(
+            "Use log10 of the variables in the model (skewed data)",
+            value=True, key="wf_log"
+        )
+
+        (step1, step2, step3, step4, step5) = st.tabs([
+            "1. Dataset", "2. EDA", "3. Statistical analysis",
+            "4. Regression modelling", "5. Result interpretation"
+        ])
+
+        wf_model = None
+
+        with step1:
+            st.write(
+                f"**{wf_dataset}**: {wf_df.shape[0]} rows and "
+                f"{wf_df.shape[1]} columns. Target: **{wf_target}**."
+            )
+            show_table(wf_df.head(10), hide_index=True)
+
+        with step2:
+            st.subheader("Missing values")
+
+            missing = pd.DataFrame({
+                "Column": list(wf_df.columns),
+                "Missing": [int(wf_df[c].isna().sum()) for c in wf_df.columns]
+            })
+
+            show_table(missing[missing["Missing"] > 0]
+                       if (missing["Missing"] > 0).any() else missing,
+                       hide_index=True)
+
+            st.subheader("Summary statistics")
+
+            summary_rows = []
+
+            for column in wf_numeric:
+                col_stats = calculate_descriptive_statistics(wf_df[column])
+
+                if col_stats is not None:
+                    summary_rows.append({
+                        "Variable": column,
+                        "n": col_stats["n"],
+                        "Mean": short_number(col_stats["mean"]),
+                        "Median": short_number(col_stats["median"]),
+                        "Std. deviation": short_number(col_stats["std"]),
+                        "Min": short_number(col_stats["sorted_values"][0]),
+                        "Max": short_number(col_stats["sorted_values"][-1])
+                    })
+
+            show_table(pd.DataFrame(summary_rows), hide_index=True)
+
+            target_stats = calculate_descriptive_statistics(wf_df[wf_target])
+
+            if target_stats is not None and target_stats["n"] >= 3:
+                fig_wf_hist, _ = build_histogram(
+                    target_stats["values"], min(12, max(3, target_stats["n"] // 2)),
+                    wf_target, target_stats["mean"], target_stats["median"],
+                    True, True
+                )
+                show_chart(fig_wf_hist, key="wf_hist")
+
+            st.subheader(f"Correlation of every variable with {wf_target}")
+
+            corr_rows = []
+
+            for column in wf_options:
+                _, r_value = calculate_pair_statistics(
+                    wf_df[column].tolist(), wf_df[wf_target].tolist()
+                )
+                if pd.notna(r_value):
+                    corr_rows.append((column, r_value))
+
+            corr_rows.sort(key=lambda item: item[1])
+
+            if corr_rows:
+                fig_wf_corr = go.Figure()
+
+                fig_wf_corr.add_trace(
+                    go.Bar(
+                        x=[r for _, r in corr_rows], y=[c for c, _ in corr_rows],
+                        orientation="h", marker_color="#81c784",
+                        marker_line=dict(color="#4cae51", width=1),
+                        hovertemplate="<b>%{y}</b><br>r = %{x:.3f}<extra></extra>"
+                    )
+                )
+
+                fig_wf_corr = style_figure(
+                    fig_wf_corr, "Pearson r with the target", "r", "",
+                    height=max(300, 28 * len(corr_rows) + 120)
+                )
+                fig_wf_corr.update_layout(margin=dict(l=20, r=30, t=80, b=60))
+                fig_wf_corr.update_xaxes(range=[-1, 1])
+
+                show_chart(fig_wf_corr, key="wf_corr")
+
+        with step3:
+            st.subheader("Confidence interval for the mean of the target")
+
+            if target_stats is None or target_stats["n"] < 3 or target_stats["std"] == 0:
+                st.warning("The target needs at least three varied values.")
+
+            else:
+                lo, hi, crit, mar = confidence_interval_for_mean(
+                    target_stats["mean"], target_stats["std"],
+                    target_stats["n"], 0.95, "t (σ unknown)"
+                )
+
+                st.write(
+                    f"95% t-interval for the mean of **{wf_target}**: "
+                    f"**{short_number(lo)} to {short_number(hi)}** "
+                    f"(mean {short_number(target_stats['mean'])}, n = "
+                    f"{target_stats['n']})."
+                )
+
+                st.subheader("Is each relationship statistically significant?")
+
+                sig_rows = []
+
+                for column in wf_options:
+                    pairs = wf_df[[column, wf_target]].dropna()
+
+                    if len(pairs) < 4:
+                        continue
+
+                    _, r_value = calculate_pair_statistics(
+                        pairs[column].tolist(), pairs[wf_target].tolist()
+                    )
+
+                    if pd.isna(r_value) or abs(r_value) >= 1:
+                        continue
+
+                    t_corr = r_value * math.sqrt((len(pairs) - 2) / (1 - r_value ** 2))
+                    p_corr = min(1.0, 2 * t_upper_tail(abs(t_corr), len(pairs) - 2))
+
+                    sig_rows.append({
+                        "Variable": column,
+                        "n": len(pairs),
+                        "r": f"{r_value:.3f}",
+                        "t": f"{t_corr:.3f}",
+                        "p-value": show_p_value(p_corr),
+                        "Significant at 5%?": "Yes" if p_corr < 0.05 else "No"
+                    })
+
+                if sig_rows:
+                    show_table(pd.DataFrame(sig_rows), hide_index=True)
+
+                st.caption(
+                    "Test of H₀: ρ = 0 using t = r√((n−2)/(1−r²)) with n−2 "
+                    "degrees of freedom. Outliers can dominate r on the raw "
+                    "scale, so interpret with care."
+                )
+
+        with step4:
+            if len(wf_predictors) == 0:
+                st.info("Select at least one predictor above.")
+            else:
+                wf_model = run_regression(
+                    wf_df, wf_predictors, wf_target, wf_log, 0.0, key="wf"
+                )
+
+        with step5:
+            if wf_model is None:
+                st.info("Fit a model in step 4 to see the interpretation.")
+
+            else:
+                st.markdown(
+                    f"""
+                    **Summary of the analysis**
+
+                    - **Data:** {wf_dataset}, target **{wf_target}**, predictors: {', '.join(wf_predictors)}.
+                    - **Exploration:** the data are mostly right-skewed with a few very large States/UTs, which is why the log10 transformation is offered.
+                    - **Model fit:** R² = {wf_model['r2']:.3f} and adjusted R² = {wf_model['adj_r2']:.3f}. The overall F-test p-value is {show_p_value(wf_model['f_p']) if not np.isnan(wf_model['f_p']) else 'N/A'}.
+                    """
+                )
+
+                if not np.isnan(wf_model["f_p"]) and wf_model["f_p"] < 0.05:
+                    st.success(
+                        "The model as a whole is statistically significant at "
+                        "the 5% level: at least one predictor is related to "
+                        f"{wf_target}."
+                    )
+                else:
+                    st.info(
+                        "The model as a whole is not statistically "
+                        "significant at the 5% level, so these predictors do "
+                        "not give convincing evidence of a linear relationship."
+                    )
+
+                st.markdown(
+                    """
+                    **Cautions**
+
+                    - Regression shows association, not causation.
+                    - Only a few dozen States/UTs are available, so estimates are uncertain and large States can dominate.
+                    - Check the residual plots and the assumption table in step 4 before trusting the p-values.
+                    - A test set (Regression Analysis page) shows how well the model predicts unseen States/UTs.
+                    """
+                )
 
 
 # ==========================================================
